@@ -9,9 +9,9 @@ import json
 import re
 import sqlite3
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-from .config import CONFIG
+from .config import CONFIG, TZ
 from .db import local_day, transaction
 
 # Earnings sources that count as activity (soft cap, roundup). starting_grant does not.
@@ -302,6 +302,57 @@ def earn_chat(conn, user_id: int, now: datetime, *, message_id: int | None = Non
                       counterpart_id=reply_to, message_id=message_id)
 
 
+def _count_earnings(conn, where: str, params: tuple) -> int:
+    return conn.execute(f"SELECT COUNT(*) FROM earnings WHERE {where}", params).fetchone()[0]
+
+
+def earn_reaction(conn, reactor_id: int, author_id: int, message_id: int, channel_id: int,
+                  now: datetime) -> tuple[int | None, int | None]:
+    """Handle a reaction add. Only a member's FIRST reaction on a message is ever
+    considered (re-adding or adding another emoji does nothing). Returns
+    (bucks paid to reactor, bucks paid to author); None means not paid."""
+    r = CONFIG.reactions
+    if reactor_id == author_id:
+        return None, None
+    with transaction(conn):
+        author = get_member(conn, author_id)
+        reactor = get_member(conn, reactor_id)
+        if author is None or reactor is None:  # bots, webhooks, unknown users
+            return None, None
+        first = conn.execute(
+            "INSERT OR IGNORE INTO reaction_credits"
+            " (message_id, reactor_id, author_id, channel_id, created_at) VALUES (?, ?, ?, ?, ?)",
+            (message_id, reactor_id, author_id, channel_id, now.isoformat()),
+        ).rowcount
+        if not first:
+            return None, None
+        # New accounts neither earn from reacting nor pay out to the author (anti-alt).
+        if not can_earn(reactor, now):
+            return None, None
+        day = local_day(now)
+
+        reactor_paid = None
+        given = _count_earnings(
+            conn, "user_id = ? AND day = ? AND source = 'react_given' AND counterpart_id = ?",
+            (reactor_id, day, author_id))
+        if given < r.give_daily_limit_per_target:
+            reactor_paid = credit(conn, reactor, "react_given", r.give_reward, now,
+                                  counterpart_id=author_id, message_id=message_id)
+
+        author_paid = None
+        if can_earn(author, now):
+            on_message = _count_earnings(
+                conn, "message_id = ? AND source = 'react_received'", (message_id,))
+            from_reactor = _count_earnings(
+                conn, "user_id = ? AND day = ? AND source = 'react_received' AND counterpart_id = ?",
+                (author_id, day, reactor_id))
+            if (on_message < r.receive_max_reactors_per_message
+                    and from_reactor < r.receive_daily_limit_per_reactor):
+                author_paid = credit(conn, author, "react_received", r.receive_reward, now,
+                                     counterpart_id=reactor_id, message_id=message_id)
+        return reactor_paid, author_paid
+
+
 # --------------------------------------------------------------------- gifts
 
 def give(conn, giver_id: int, recipient_id: int, amount: int, reason: str | None,
@@ -428,6 +479,80 @@ def leaderboard(conn) -> list[dict]:
         elif row["amount"] == entry["amount"]:
             entry["holders"].append(row["holder_name"])
     return sorted(boards.values(), key=lambda e: (-e["amount"], e["currency_name"].casefold()))
+
+
+# --------------------------------------------------------------------- roundup
+# The roundup covers everything since the previous roundup (not midnight-to-midnight),
+# so activity between 11pm and midnight shows up in the next night's roundup.
+
+def _utc_iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def _get_state(conn, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM bot_state WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def _set_state(conn, key: str, value: str) -> None:
+    conn.execute("INSERT INTO bot_state (key, value) VALUES (?, ?)"
+                 " ON CONFLICT (key) DO UPDATE SET value = excluded.value", (key, value))
+
+
+def roundup_window_start(conn, now: datetime) -> datetime:
+    last = _get_state(conn, "last_roundup_at") or _get_state(conn, "launched_at")
+    return parse_ts(last) if last else now - timedelta(days=1)
+
+
+def roundup_due(conn, now: datetime) -> bool:
+    """True once it's past roundup time today (local) and today's roundup hasn't run."""
+    local = now.astimezone(TZ)
+    scheduled = local.replace(hour=CONFIG.roundup.hour, minute=CONFIG.roundup.minute,
+                              second=0, microsecond=0)
+    if local < scheduled:
+        return False
+    last = _get_state(conn, "last_roundup_at")
+    return last is None or parse_ts(last).astimezone(TZ).date() < local.date()
+
+
+def mark_roundup_done(conn, now: datetime) -> None:
+    _set_state(conn, "last_roundup_at", _utc_iso(now))
+
+
+def roundup(conn, start: datetime, end: datetime) -> dict:
+    """Earnings between start and end, per member, split into chat / reactions received /
+    voice. 'chat' includes the small payouts for reacting to others' posts."""
+    s, e = _utc_iso(start), _utc_iso(end)
+    placeholders = ",".join("?" * len(ACTIVITY_SOURCES))
+    rows = conn.execute(
+        "SELECT e.user_id, m.display_name, e.source, SUM(e.amount) AS total"
+        " FROM earnings e JOIN members m ON m.user_id = e.user_id"
+        f" WHERE e.created_at >= ? AND e.created_at < ? AND e.source IN ({placeholders})"
+        " GROUP BY e.user_id, e.source",
+        (s, e, *ACTIVITY_SOURCES),
+    ).fetchall()
+    bucket = {"message": "chat", "reply": "chat", "react_given": "chat",
+              "react_received": "reactions", "voice": "voice"}
+    people: dict[int, dict] = {}
+    for row in rows:
+        p = people.setdefault(row["user_id"], {"user_id": row["user_id"],
+                                               "name": row["display_name"],
+                                               "chat": 0, "reactions": 0, "voice": 0})
+        p[bucket[row["source"]]] += row["total"]
+    for p in people.values():
+        p["total"] = p["chat"] + p["reactions"] + p["voice"]
+    ranked = sorted((p for p in people.values() if p["total"] > 0),
+                    key=lambda p: (-p["total"], p["name"].casefold()))
+
+    top_post = conn.execute(
+        "SELECT rc.message_id, rc.channel_id, rc.author_id, m.display_name AS author_name,"
+        " COUNT(*) AS reactors"
+        " FROM reaction_credits rc JOIN members m ON m.user_id = rc.author_id"
+        " WHERE rc.created_at >= ? AND rc.created_at < ?"
+        " GROUP BY rc.message_id ORDER BY reactors DESC, MIN(rc.created_at) LIMIT 1",
+        (s, e),
+    ).fetchone()
+    return {"members": ranked, "top_post": dict(top_post) if top_post else None}
 
 
 def hoarders(conn, limit: int = 10) -> list[sqlite3.Row]:

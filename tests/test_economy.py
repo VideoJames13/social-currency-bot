@@ -237,5 +237,101 @@ class TextEarningTest(Base):
                 self.assertEqual(economy.visible_length(text), n)
 
 
+class ReactionTest(Base):
+    R = CONFIG.reactions
+
+    def setUp(self):
+        super().setUp()
+        self.add(1, "Reactor")
+        self.add(2, "Author")
+        self.launch()
+
+    def react(self, msg, reactor=1, author=2, at=T0):
+        return economy.earn_reaction(self.conn, reactor, author, msg, 555, at)
+
+    def test_pays_both_sides_once_per_message(self):
+        self.assertEqual(self.react(100), (self.R.give_reward, self.R.receive_reward))
+        self.assertEqual(self.react(100), (None, None))  # re-add / second emoji
+        self.assertEqual(self.member(1)["mint"], START + self.R.give_reward)
+        self.assertEqual(self.member(2)["mint"], START + self.R.receive_reward)
+
+    def test_self_bot_and_unknown(self):
+        self.assertEqual(self.react(100, reactor=2, author=2), (None, None))
+        self.assertEqual(self.react(101, author=999), (None, None))  # bot/webhook author
+        self.assertEqual(self.react(102, reactor=999), (None, None))
+
+    def test_daily_pair_limits_and_reset(self):
+        results = [self.react(200 + i) for i in range(12)]
+        given = [g for g, _ in results if g is not None]
+        received = [r for _, r in results if r is not None]
+        self.assertEqual(len(given), self.R.give_daily_limit_per_target)        # 10
+        self.assertEqual(len(received), self.R.receive_daily_limit_per_reactor)  # 5
+        tomorrow = T0 + timedelta(days=1)
+        self.assertEqual(self.react(300, at=tomorrow),
+                         (self.R.give_reward, self.R.receive_reward))
+
+    def test_limit_is_per_pair(self):
+        for i in range(self.R.give_daily_limit_per_target):
+            self.react(200 + i)
+        self.add(3, "Other")
+        self.launch()
+        self.assertEqual(self.react(400, author=3), (self.R.give_reward, self.R.receive_reward))
+
+    def test_max_reactors_per_message(self):
+        n = self.R.receive_max_reactors_per_message
+        for uid in range(10, 10 + n + 2):
+            self.add(uid, f"U{uid}")
+        self.launch()
+        paid = [self.react(500, reactor=uid)[1] for uid in range(10, 10 + n + 2)]
+        self.assertEqual(sum(p is not None for p in paid), n)
+
+    def test_new_accounts(self):
+        self.add(3, "NewReactor", joined=T0 - timedelta(days=1))
+        self.assertEqual(self.react(600, reactor=3), (None, None))   # earns nothing, pays nothing
+        later = T0 + timedelta(days=7)
+        self.assertEqual(self.react(600, reactor=3, at=later), (None, None))  # already used
+        self.add(4, "NewAuthor", joined=T0 - timedelta(days=1))
+        self.assertEqual(self.react(601, author=4), (self.R.give_reward, None))
+
+
+class RoundupTest(Base):
+    def setUp(self):
+        super().setUp()
+        for uid, name in [(1, "Alice"), (2, "Bob"), (3, "Cara")]:
+            self.add(uid, name)
+        self.launch()
+
+    def test_window_split_and_highlights(self):
+        start, end = T0, T0 + timedelta(hours=10)
+        economy.earn_chat(self.conn, 1, T0 + timedelta(hours=1))                # Alice chat 10
+        economy.earn_chat(self.conn, 2, T0 + timedelta(hours=1), reply_to=1)   # Bob chat 15
+        for reactor in (1, 3):                                                 # 2 people on Bob's post
+            economy.earn_reaction(self.conn, reactor, 2, 900, 555, T0 + timedelta(hours=2))
+        economy.earn_reaction(self.conn, 2, 1, 901, 555, T0 + timedelta(hours=3))
+        economy.earn_chat(self.conn, 3, end + timedelta(minutes=1))            # outside window
+        data = economy.roundup(self.conn, start, end)
+        by_name = {p["name"]: p for p in data["members"]}
+        R = CONFIG.reactions
+        self.assertEqual(by_name["Bob"]["chat"], CONFIG.chat.reply_reward + R.give_reward)
+        self.assertEqual(by_name["Bob"]["reactions"], 2 * R.receive_reward)
+        self.assertEqual(by_name["Alice"]["chat"], CONFIG.chat.message_reward + R.give_reward)
+        self.assertEqual(by_name["Cara"]["chat"], R.give_reward)
+        self.assertEqual(data["members"][0]["name"], "Bob")
+        self.assertEqual((data["top_post"]["message_id"], data["top_post"]["reactors"]), (900, 2))
+        self.assertNotIn("starting_grant", str(data))
+
+    def test_due_once_per_day_at_roundup_time(self):
+        # Nov 5 2026, America/New_York is UTC-5: 23:00 local = 04:00 UTC Nov 6
+        before = datetime(2026, 11, 6, 3, 59, tzinfo=timezone.utc)
+        at = datetime(2026, 11, 6, 4, 0, tzinfo=timezone.utc)
+        self.assertFalse(economy.roundup_due(self.conn, before))
+        self.assertTrue(economy.roundup_due(self.conn, at))
+        economy.mark_roundup_done(self.conn, at)
+        self.assertFalse(economy.roundup_due(self.conn, at + timedelta(minutes=30)))
+        self.assertFalse(economy.roundup_due(self.conn, at + timedelta(hours=12)))  # next day, 11am
+        self.assertTrue(economy.roundup_due(self.conn, at + timedelta(days=1)))
+        self.assertEqual(economy.roundup_window_start(self.conn, at + timedelta(days=1)), at)
+
+
 if __name__ == "__main__":
     unittest.main()

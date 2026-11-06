@@ -5,6 +5,7 @@ A Discord social-currency bot for a ~50-member server (~20 active). Full spec is
 ## Working rules
 
 - **Build in stages, in order:** skeleton → commands → text earning → reaction earning → voice earning → speaking check → deployment.
+- **Launch plan (decided 2026-11-05):** build *all* stages against the test server first (it has only the owner + an alt), then switch `config.toml` to the real server, delete the test `bucks.db`, and do one full test there. That first real-server run **is the real launch**: balances are kept, not reset. Reset options if ever needed: `/adjust`, restore a nightly backup, rename `bucks.db` for a full reset, or a one-off soft-reset script.
 - **Check in with the user before changing anything already built** in an earlier stage.
 - **Git:** commit at the end of each stage (tests passing) and **push to GitHub** (`origin` = github.com/VideoJames13/social-currency-bot, public) without asking. Commits use the GitHub noreply email; never commit `.env` or `*.db`.
 - **Language:** Python (discord.py) + SQLite by default. **Before starting voice earning**, confirm a Python library supports DAVE-encrypted voice (required by Discord since March 2026) *and* speaking events. If none does, propose switching to JavaScript (discord.js) and **wait for the user's OK**.
@@ -82,7 +83,8 @@ A Discord social-currency bot for a ~50-member server (~20 active). Full spec is
 - `/adjust` can change a mint, or (with `currency:`) a trophy-case holding, e.g. to undo a farmed gift.
 - **All activity earning goes through `economy.credit()`**: it applies the soft cap (splitting a payout that crosses the threshold), carries fractional bucks in `members.earn_carry` so mints stay integers without rounding loss, updates the mint and logs to `earnings` (`base_amount` = before cap, `amount` = whole bucks credited, `detail` JSON notes `soft_capped`). Reactions and voice must use it too.
 - **Text earning:** only ordinary messages (`default`/`reply` types; no bots, webhooks, system messages, forwards). Length is `visible_length()`: custom emoji and mentions count as 1 char, whitespace runs as 1. A reply pays the reply rate only if it replies to another human; replies to self/bots/deleted messages pay the message rate. Cooldown is read from the last `message`/`reply` row in `earnings`, timed by `message.created_at`. Messages sent while the bot is offline aren't backfilled.
-- **Daily roundup** (11pm) is planned for the end of the reaction stage, once chat + reaction data exist; voice adds its column later.
+- **Reaction earning:** only a member's *first* reaction on a message is ever considered (`reaction_credits` PK), whether or not it paid. Reactions from new (<7 day) accounts pay neither side (anti-alt); reacting to a new member's post still pays the reactor. Bot/webhook authors aren't in `members`, so reacting to them pays nothing. Daily pair limits and the 25-reactor cap are counted from `earnings` rows. Removing a reaction does nothing.
+- **Daily roundup:** a 1-minute loop posts once per local day after 11pm, covering everything *since the previous roundup* (so 11pm-midnight activity isn't lost). If the bot was offline at 11pm it posts when it comes back that same evening. Embed, no tags. Columns: 💬 chat = message + reply + react_given, ⭐ = react_received, 🎙️ = voice. Most-reacted post = most unique reactors added in the window. Nothing is posted if nobody earned. Owner-only `/roundup` previews it ephemerally.
 - Python 3.15 on the dev PC; discord.py 2.7.1.
 
 ## Discord setup requirements

@@ -128,6 +128,17 @@ MIGRATIONS = [
     """
     ALTER TABLE members ADD COLUMN earn_carry REAL NOT NULL DEFAULT 0;
     """,
+    # 4: reaction earning + daily roundup
+    # - reaction_credits.channel_id: to link the most-reacted post in the roundup.
+    # - indexes for per-message caps and time-window roundup queries.
+    # - messages table was never used (reaction events carry the author ID); dropped.
+    """
+    ALTER TABLE reaction_credits ADD COLUMN channel_id INTEGER;
+    CREATE INDEX reaction_credits_created ON reaction_credits (created_at);
+    CREATE INDEX earnings_message ON earnings (message_id) WHERE message_id IS NOT NULL;
+    CREATE INDEX earnings_created ON earnings (created_at);
+    DROP TABLE messages;
+    """,
 ]
 
 

@@ -16,6 +16,8 @@ EXTENSIONS = [
     "bot.cogs.currency",
     "bot.cogs.admin",
     "bot.cogs.chat",
+    "bot.cogs.reactions",
+    "bot.cogs.roundup",
 ]
 
 
