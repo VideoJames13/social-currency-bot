@@ -107,6 +107,21 @@ MIGRATIONS = [
         value TEXT
     );
     """,
+    # 2: commands stage
+    # - currency_key: normalized (NFKC + casefold) name, unique across the server.
+    #   SQLite's lower() only folds ASCII, so uniqueness is enforced on this instead.
+    # - currency_custom: 0 = default "<DisplayName>-bucks" that follows name changes.
+    # - in_guild: 0 once a member leaves (kept for history, hidden from boards).
+    # - adjustments.currency_owner_id: NULL = mint; else trophy-case holding of that currency.
+    """
+    ALTER TABLE members ADD COLUMN currency_key TEXT;
+    ALTER TABLE members ADD COLUMN currency_custom INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE members ADD COLUMN in_guild INTEGER NOT NULL DEFAULT 1;
+    DROP INDEX members_currency_name_unique;
+    CREATE UNIQUE INDEX members_currency_key_unique
+        ON members (currency_key) WHERE currency_key IS NOT NULL;
+    ALTER TABLE adjustments ADD COLUMN currency_owner_id INTEGER;
+    """,
 ]
 
 

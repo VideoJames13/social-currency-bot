@@ -63,9 +63,22 @@ A Discord social-currency bot for a ~50-member server (~20 active). Full spec is
 
 - `config.toml` — every rate/cap/threshold + guild/channel IDs. `.env` — `DISCORD_TOKEN`, `OWNER_ID`.
 - `bot/config.py` loads both; `bot/db.py` holds schema as append-only `MIGRATIONS` (tracked via `PRAGMA user_version`) — never edit an old migration, add a new one.
-- `bot/client.py` — intents, guild-scoped command sync, member sync. Features live in `bot/cogs/*`, registered in `EXTENSIONS`.
-- `bot/checks.py` — `owner_only()` check for `/adjust` and `/setup`.
+- `bot/client.py` — intents, guild-scoped command sync. Features live in `bot/cogs/*`, registered in `EXTENSIONS`.
+- `bot/economy.py` — all balance/rule logic as pure SQLite functions taking `now` (no Discord objects) so it's unit-testable. Cogs stay thin: validate Discord-specific things, call economy, format replies.
+- `bot/cogs/members.py` — member sync, leave/rename tracking, starting-balance loop. `currency.py` — member commands. `admin.py` — `/adjust`, `/setup`. `bot/guide.py` — pinned text built from config.
+- `bot/checks.py` — `owner_only()`; owner commands also use `default_permissions(administrator=True)` to hide them.
 - Setup: `python -m venv .venv` then `.venv/Scripts/python -m pip install -r requirements.txt`. Run: `.venv/Scripts/python -m bot`.
+- Tests: `.venv/Scripts/python -m unittest discover tests` (stdlib unittest, no extra deps). Add tests for every new earning rule; run them before each commit.
+
+## Decisions made during the build
+
+- **Currency names:** uniqueness is on `currency_key` (NFKC + casefold + collapsed spaces), not SQLite `lower()`. Defaults (`DisplayName-bucks`) follow display-name changes until the member sets a custom name; default collisions get " 2", " 3". Custom names: max 20 chars, letters/numbers/spaces/`- ' . ! & + ?`, and can't match another current member's default.
+- **Emoji:** one standard emoji, or a custom emoji from this server only.
+- **Launch:** `bot_state.launched_at` is set the first time starting grants run. Members who joined before it get 500 immediately; later joiners get 500 when they pass 7 days. Grants are logged in `earnings` as `starting_grant`, which is excluded from activity totals (`ACTIVITY_SOURCES`).
+- **7-day rule** uses the server join date (`member.joined_at`), not Discord account age. Rejoining resets it.
+- **Members who leave** are kept (`in_guild = 0`) and hidden from `/leaderboard` and `/hoarders`.
+- `/trophies`, `/leaderboard`, `/hoarders` reply publicly; `/wallet`, `/setcurrency`, `/give` confirmation, and owner commands reply ephemerally.
+- `/adjust` can change a mint, or (with `currency:`) a trophy-case holding, e.g. to undo a farmed gift.
 - Python 3.15 on the dev PC; discord.py 2.7.1.
 
 ## Discord setup requirements

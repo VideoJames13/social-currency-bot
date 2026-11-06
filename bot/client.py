@@ -1,4 +1,4 @@
-"""The bot client: intents, startup, command sync, member sync."""
+"""The bot client: intents, startup, command sync."""
 
 import logging
 
@@ -12,6 +12,9 @@ log = logging.getLogger("bucks")
 
 EXTENSIONS = [
     "bot.cogs.core",
+    "bot.cogs.members",
+    "bot.cogs.currency",
+    "bot.cogs.admin",
 ]
 
 
@@ -23,6 +26,7 @@ def make_intents() -> discord.Intents:
     intents.guild_messages = True
     intents.guild_reactions = True
     intents.voice_states = True
+    intents.emojis_and_stickers = True  # /setcurrency checks custom emoji belong to this server
     return intents
 
 
@@ -44,45 +48,11 @@ class BucksBot(commands.Bot):
         log.info("Logged in as %s (id %s)", self.user, self.user.id)
         guild = self.get_guild(CONFIG.server.guild_id)
         if guild is None:
-            log.error("Bot is not in guild %s — check guild_id in config.toml and the invite.",
+            log.error("Bot is not in guild %s. Check guild_id in config.toml and the invite.",
                       CONFIG.server.guild_id)
             return
-        self.sync_members(guild)
         channel = guild.get_channel(CONFIG.server.transactions_channel_id)
         if channel is None:
             log.error("Transactions channel %s not found.", CONFIG.server.transactions_channel_id)
         else:
             log.info("Transactions channel: #%s", channel.name)
-
-    async def on_member_join(self, member: discord.Member):
-        if member.guild.id == CONFIG.server.guild_id and not member.bot:
-            self.upsert_member(member)
-
-    async def on_member_update(self, before: discord.Member, after: discord.Member):
-        if after.guild.id == CONFIG.server.guild_id and not after.bot and \
-                before.display_name != after.display_name:
-            self.upsert_member(after)
-
-    def sync_members(self, guild: discord.Guild):
-        humans = [m for m in guild.members if not m.bot]
-        with db.transaction(self.db):
-            for m in humans:
-                self.upsert_member(m)
-        log.info("Synced %d members", len(humans))
-
-    def upsert_member(self, member: discord.Member):
-        self.db.execute(
-            """
-            INSERT INTO members (user_id, display_name, joined_at, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT (user_id) DO UPDATE SET
-                display_name = excluded.display_name,
-                joined_at = excluded.joined_at
-            """,
-            (
-                member.id,
-                member.display_name,
-                member.joined_at.isoformat() if member.joined_at else None,
-                db.now_utc().isoformat(),
-            ),
-        )
