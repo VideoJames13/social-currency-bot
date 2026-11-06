@@ -9,7 +9,7 @@ database_path = "bucks.db"
 
 [economy]
 starting_balance = 500
-min_account_age_days = 7        # members who joined the server more recently don't earn or receive gifts
+min_account_age_days = 0        # members who joined the server more recently don't earn or receive gifts
 currency_suffix = "-bucks"      # default currency name = DisplayName + suffix
 currency_name_max_length = 20
 
