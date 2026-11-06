@@ -59,6 +59,15 @@ A Discord social-currency bot for a ~50-member server (~20 active). Full spec is
 - Earnings are **never** announced individually.
 - **Daily roundup at 11pm ET** in the transactions channel, no tags: each active member's earnings for the day split into chat, reactions received, and voice; plus the day's top earner and most-reacted post.
 
+## Project layout & running
+
+- `config.toml` — every rate/cap/threshold + guild/channel IDs. `.env` — `DISCORD_TOKEN`, `OWNER_ID`.
+- `bot/config.py` loads both; `bot/db.py` holds schema as append-only `MIGRATIONS` (tracked via `PRAGMA user_version`) — never edit an old migration, add a new one.
+- `bot/client.py` — intents, guild-scoped command sync, member sync. Features live in `bot/cogs/*`, registered in `EXTENSIONS`.
+- `bot/checks.py` — `owner_only()` check for `/adjust` and `/setup`.
+- Setup: `python -m venv .venv` then `.venv/Scripts/python -m pip install -r requirements.txt`. Run: `.venv/Scripts/python -m bot`.
+- Python 3.15 on the dev PC; discord.py 2.7.1.
+
 ## Discord setup requirements
 
 - Privileged intents: **Server Members** and **Message Content** must be enabled in the Developer Portal.
