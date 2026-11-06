@@ -6,6 +6,7 @@ A Discord social-currency bot for a ~50-member server (~20 active). Full spec is
 
 - **Build in stages, in order:** skeleton → commands → text earning → reaction earning → voice earning → speaking check → deployment.
 - **Check in with the user before changing anything already built** in an earlier stage.
+- **Git:** commit at the end of each stage (tests passing) and **push to GitHub** (`origin` = github.com/VideoJames13/social-currency-bot, public) without asking. Commits use the GitHub noreply email; never commit `.env` or `*.db`.
 - **Language:** Python (discord.py) + SQLite by default. **Before starting voice earning**, confirm a Python library supports DAVE-encrypted voice (required by Discord since March 2026) *and* speaking events. If none does, propose switching to JavaScript (discord.js) and **wait for the user's OK**.
 - **Secrets:** bot token and owner user ID live in `.env` (never committed). `.env.example` documents the keys.
 - **All rates, caps, thresholds, channel IDs, and timezone live in one config file.** No magic numbers in code. The `/setup` guide text is generated from this config.
