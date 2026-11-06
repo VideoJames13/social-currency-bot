@@ -91,6 +91,15 @@ A Discord social-currency bot for a ~50-member server (~20 active). Full spec is
 - **Daily roundup:** a 1-minute loop posts once per local day after 11pm, covering everything *since the previous roundup* (so 11pm-midnight activity isn't lost). If the bot was offline at 11pm it posts when it comes back that same evening. Embed, no tags. Columns: 💬 chat = message + reply + react_given, ⭐ = react_received, 🎙️ = voice. Most-reacted post = most unique reactors added in the window. Nothing is posted if nobody earned. Owner-only `/roundup` previews it ephemerally.
 - Python 3.15 on the dev PC; discord.py 2.7.1.
 
+## Deployment
+
+- Host: DigitalOcean droplet, Ubuntu LTS, New York region (IP is in Claude's private memory, not this public repo). Day-to-day commands and restore steps: `deploy/README.md`.
+- `deploy/setup.sh` (one-time, idempotent, run as root): updates, 1 GB swap, key-only SSH, ufw (SSH in only), unattended security upgrades with 4:30am reboot, journald cap 200 MB, user `bucks`, clone to `/home/bucks/social-currency-bot`, Python 3.15 via uv, tests, systemd units.
+- `bucks-bot.service`: `Restart=always`, `RestartSec=15`, **`StartLimitBurst=5` per 600s** (protects the token from Discord's ~1000 logins/day limit); `bucks-bot-watchdog.timer` retries a *failed* unit every 30 min. Sandboxed: writes only to the app dir.
+- `bucks-bot-backup.timer`: 3:30am ET, `deploy/backup.sh` (SQLite online `.backup`, integrity check, gzip, atomic rename, keep 14) into `/home/bucks/backups`.
+- `deploy/update.sh`: backup → `git pull --ff-only` → deps → tests → restart; rolls code back if tests fail. Config changes go through git, never edited on the server; only `.env` is edited there.
+- `.gitattributes` forces LF for `*.sh`/units. **Never run the bot on the PC and the server at once** (double payouts).
+
 ## Discord setup requirements
 
 - Privileged intents: **Server Members** and **Message Content** must be enabled in the Developer Portal.

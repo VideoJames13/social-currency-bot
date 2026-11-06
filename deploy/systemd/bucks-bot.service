@@ -1,0 +1,33 @@
+[Unit]
+Description=Social currency Discord bot
+After=network-online.target
+Wants=network-online.target
+# Restart cap: at most 5 starts in 10 minutes. Each start logs in to Discord, and too
+# many logins in a day (~1000) makes Discord reset the token. After the cap the unit
+# stays failed; bucks-bot-watchdog.timer retries every 30 minutes.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=bucks
+Group=bucks
+WorkingDirectory=/home/bucks/social-currency-bot
+ExecStart=/home/bucks/social-currency-bot/.venv/bin/python -m bot
+Restart=always
+RestartSec=15
+Environment=PYTHONUNBUFFERED=1
+
+# Sandboxing: the bot can only write inside its own folder.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/bucks/social-currency-bot
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

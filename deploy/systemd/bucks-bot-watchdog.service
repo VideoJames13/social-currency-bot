@@ -1,0 +1,8 @@
+[Unit]
+Description=Retry the bucks bot if it hit its restart cap
+
+[Service]
+Type=oneshot
+# Only acts if the bot is in the "failed" state (crash loop hit the cap). A bot you
+# stopped on purpose with `systemctl stop` is "inactive", and is left alone.
+ExecStart=/bin/sh -c 'if systemctl is-failed --quiet bucks-bot; then systemctl reset-failed bucks-bot && systemctl start bucks-bot; fi'

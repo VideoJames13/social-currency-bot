@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up the bucks database
+
+[Service]
+Type=oneshot
+User=bucks
+Group=bucks
+ExecStart=/bin/bash /home/bucks/social-currency-bot/deploy/backup.sh
