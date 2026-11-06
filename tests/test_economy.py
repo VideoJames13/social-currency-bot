@@ -467,6 +467,15 @@ class SpeakingCheckTest(unittest.TestCase):
         people = [VM(1, muted=True), VM(2)]
         self.assertEqual(self.factor(1, people, {2: T0}), (CONFIG.speaking.quiet_rate, "quiet"))
 
+    def test_muted_member_never_counts_as_spoke(self):
+        # Spoke a minute ago, then muted: quiet rate right away, not 10 more minutes of full.
+        people = [VM(1, muted=True), VM(2)]
+        self.assertEqual(self.factor(1, people, {1: T0 - timedelta(minutes=1)}),
+                         (CONFIG.speaking.quiet_rate, "quiet"))
+        # Unmuted with the same history: full rate.
+        self.assertEqual(self.factor(1, [VM(1), VM(2)], {1: T0 - timedelta(minutes=1)}),
+                         (1.0, "spoke"))
+
     def test_talking_alone_earns_nothing(self):
         self.assertEqual(self.factor(1, [VM(1)], {1: T0}), (0.0, "alone"))
         self.assertEqual(self.factor(1, [VM(1), VM(2, deaf=True)], {1: T0}), (0.0, "alone"))
@@ -515,8 +524,9 @@ class ListenerTest(unittest.TestCase):
         self.vc._on_packet(self.rtp(555))
         self.assertEqual(self.vc.last_spoke(), {})                    # unknown SSRC ignored
         asyncio.run(self.vc._on_ws_message(None, {"op": 5, "d": {
-            "user_id": "42", "ssrc": 555, "speaking": 0}}))
-        self.assertEqual(self.vc.last_spoke(), {})                    # mapping only
+            "user_id": "42", "ssrc": 555, "speaking": 1}}))
+        self.assertEqual(self.vc.last_spoke(), {})  # op 5 is mapping only, even with speaking=1
+        self.assertEqual(self.vc._ssrc_user, {555: 42})
         self.vc._on_packet(self.rtp(555))
         self.assertIn(42, self.vc.last_spoke())
         asyncio.run(self.vc._on_ws_message(None, {"op": 13, "d": {"user_id": "42"}}))

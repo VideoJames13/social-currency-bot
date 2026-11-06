@@ -63,7 +63,8 @@ def activity_factor(m: VoiceMember, channel: VoiceChannel, established: set[int]
 
     Channel the bot is listening in (speaking check):
       - nobody else (counted) in the channel -> 0
-      - member spoke within the window -> full rate
+      - member spoke within the window AND isn't muted right now -> full rate
+        (muting drops you to the quiet rate at the next tick)
       - someone counted in the channel spoke within the window -> quiet_rate (50%)
       - nobody spoke within the window -> 0, except during the bot's first window
         in the channel (no data yet), when the unmuted-other rule applies instead.
@@ -86,7 +87,7 @@ def activity_factor(m: VoiceMember, channel: VoiceChannel, established: set[int]
         t = channel.last_spoke.get(user_id)
         return t is not None and t >= cutoff
 
-    if recent(m.user_id):
+    if recent(m.user_id) and not m.muted:
         return 1.0, "spoke"
     if any(recent(o.user_id) for o in people):
         return s.quiet_rate, "quiet"

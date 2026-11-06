@@ -4,7 +4,8 @@ Discord voice packets are RTP: a 12-byte header (unencrypted, includes the sende
 SSRC number) followed by an encrypted payload (transport + DAVE end-to-end encryption).
 Clients only send packets while someone is talking, so "packets are arriving from
 SSRC X" means "X is talking". The voice server tells us which SSRC belongs to which
-user (voice gateway op 5, SPEAKING).
+user (voice gateway op 5, SPEAKING); that message is used for the mapping only, never
+as a sign of speech.
 
 We read ONLY the header's SSRC and note the time. The payload is never decrypted,
 decoded, buffered or saved, and these timestamps live in memory only.
@@ -62,11 +63,12 @@ class SpeakingVoiceClient(discord.VoiceClient):
         op, data = msg.get("op"), msg.get("d") or {}
         try:
             if op == OP_SPEAKING and "user_id" in data:
+                # Used ONLY to learn which SSRC belongs to whom. Its "speaking" flag is
+                # not evidence of speech (it's also sent on joins/reconnects, even for
+                # muted users), so only actual audio packets count as speaking.
                 user_id, ssrc = int(data["user_id"]), int(data["ssrc"])
                 with self._lock:
                     self._ssrc_user[ssrc] = user_id
-                    if int(data.get("speaking", 0)) & 1:  # microphone flag
-                        self._mark(user_id)
             elif op == OP_CLIENT_DISCONNECT and "user_id" in data:
                 user_id = int(data["user_id"])
                 with self._lock:
