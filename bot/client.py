@@ -15,6 +15,7 @@ EXTENSIONS = [
     "bot.cogs.members",
     "bot.cogs.currency",
     "bot.cogs.admin",
+    "bot.cogs.chat",
 ]
 
 

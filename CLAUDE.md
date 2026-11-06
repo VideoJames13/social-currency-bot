@@ -80,6 +80,9 @@ A Discord social-currency bot for a ~50-member server (~20 active). Full spec is
 - **Members who leave** are kept (`in_guild = 0`) and hidden from `/leaderboard` and `/hoarders`.
 - `/trophies`, `/leaderboard`, `/hoarders` reply publicly; `/wallet`, `/setcurrency`, `/give` confirmation, and owner commands reply ephemerally.
 - `/adjust` can change a mint, or (with `currency:`) a trophy-case holding, e.g. to undo a farmed gift.
+- **All activity earning goes through `economy.credit()`**: it applies the soft cap (splitting a payout that crosses the threshold), carries fractional bucks in `members.earn_carry` so mints stay integers without rounding loss, updates the mint and logs to `earnings` (`base_amount` = before cap, `amount` = whole bucks credited, `detail` JSON notes `soft_capped`). Reactions and voice must use it too.
+- **Text earning:** only ordinary messages (`default`/`reply` types; no bots, webhooks, system messages, forwards). Length is `visible_length()`: custom emoji and mentions count as 1 char, whitespace runs as 1. A reply pays the reply rate only if it replies to another human; replies to self/bots/deleted messages pay the message rate. Cooldown is read from the last `message`/`reply` row in `earnings`, timed by `message.created_at`. Messages sent while the bot is offline aren't backfilled.
+- **Daily roundup** (11pm) is planned for the end of the reaction stage, once chat + reaction data exist; voice adds its column later.
 - Python 3.15 on the dev PC; discord.py 2.7.1.
 
 ## Discord setup requirements

@@ -15,7 +15,7 @@ OLD = T0 - timedelta(days=100)   # long-time member
 START = CONFIG.economy.starting_balance
 
 
-class EconomyTest(unittest.TestCase):
+class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.conn = db.connect(Path(self.tmp.name) / "t.db")
@@ -34,6 +34,8 @@ class EconomyTest(unittest.TestCase):
     def launch(self, now=T0):
         return economy.grant_starting_balances(self.conn, now)
 
+
+class EconomyTest(Base):
     # ---------------------------------------------------------- migrations
     def test_upgrade_from_v1_database(self):
         path = Path(self.tmp.name) / "v1.db"
@@ -167,6 +169,72 @@ class EconomyTest(unittest.TestCase):
         self.assertEqual([(b["currency_name"], b["holders"], b["amount"]) for b in boards],
                          [("B-bucks", ["C"], 100), ("A-bucks", ["B", "C"], 40)])
         self.assertEqual([r["user_id"] for r in economy.hoarders(self.conn)], [3, 1, 2])
+
+
+class TextEarningTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.add(1, "A")
+        self.add(2, "B")
+        self.launch()
+
+    def chat(self, at, uid=1, reply_to=None):
+        return economy.earn_chat(self.conn, uid, at, reply_to=reply_to)
+
+    def test_message_and_reply_rewards(self):
+        self.assertEqual(self.chat(T0), CONFIG.chat.message_reward)
+        self.assertEqual(self.chat(T0 + timedelta(minutes=1), reply_to=2), CONFIG.chat.reply_reward)
+        self.assertEqual(self.member(1)["mint"],
+                         START + CONFIG.chat.message_reward + CONFIG.chat.reply_reward)
+        self.assertEqual(economy.earned_today(self.conn, 1, T0),
+                         CONFIG.chat.message_reward + CONFIG.chat.reply_reward)
+
+    def test_shared_cooldown(self):
+        cd = CONFIG.chat.cooldown_seconds
+        self.assertIsNotNone(self.chat(T0))
+        self.assertIsNone(self.chat(T0 + timedelta(seconds=cd - 1), reply_to=2))  # shared
+        self.assertIsNotNone(self.chat(T0 + timedelta(seconds=cd)))
+        self.assertIsNotNone(self.chat(T0, uid=2))  # cooldowns are per member
+
+    def test_new_and_departed_members_dont_earn(self):
+        self.add(3, "New", joined=T0 - timedelta(days=6))
+        self.assertIsNone(self.chat(T0, uid=3))
+        self.assertIsNotNone(self.chat(T0 + timedelta(days=1), uid=3))
+        economy.mark_left(self.conn, 2)
+        self.assertIsNone(self.chat(T0, uid=2))
+        self.assertIsNone(self.chat(T0, uid=999))  # unknown
+
+    def test_soft_cap_split_and_fraction_carry(self):
+        member = self.member(1)
+        with db.transaction(self.conn):  # get to 5 below the cap
+            economy.credit(self.conn, member, "message",
+                           CONFIG.soft_cap.daily_threshold - 5, T0)
+        rate = CONFIG.soft_cap.rate_after          # 0.25
+        reward = CONFIG.chat.message_reward        # 10
+        t = T0 + timedelta(minutes=1)
+        # 5 at full rate + 5 at 25% = 6.25 -> 6 now, 0.25 carried
+        self.assertEqual(self.chat(t), int(5 + 5 * rate))
+        # 2.5 + 0.25 = 2.75 -> 2, carry 0.75; then 2.5 + 0.75 = 3.25 -> 3
+        self.assertEqual(self.chat(t + timedelta(minutes=1)), 2)
+        self.assertEqual(self.chat(t + timedelta(minutes=2)), 3)
+        self.assertAlmostEqual(self.member(1)["earn_carry"], 0.25)
+        detail = self.conn.execute(
+            "SELECT detail FROM earnings ORDER BY id DESC LIMIT 1").fetchone()["detail"]
+        self.assertIn("soft_capped", detail)
+        # Next day (midnight America/New_York = 05:00 UTC in November): full rate again
+        next_day = datetime(2026, 11, 2, 5, 0, tzinfo=timezone.utc)
+        self.assertEqual(self.chat(next_day - timedelta(minutes=1)), 2)  # still capped day
+        self.assertEqual(self.chat(next_day), reward)
+
+    def test_visible_length(self):
+        cases = {
+            "hey": 3, "hello": 5, "  hi     yo  ": 5,
+            "<:pizza:123456789012345678>": 1, "<a:x:123456789012345678> ok": 4,
+            "<@123456789012345678> hi": 4, "<@&123> <#456>": 3,
+        }
+        for text, n in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(economy.visible_length(text), n)
 
 
 if __name__ == "__main__":

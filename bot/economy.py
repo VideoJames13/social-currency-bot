@@ -5,6 +5,7 @@ that records something takes `now` (an aware UTC datetime; db.now_utc() in
 production) so tests can control time.
 """
 
+import json
 import re
 import sqlite3
 import unicodedata
@@ -233,6 +234,72 @@ def grant_starting_balances(conn, now: datetime) -> list[int]:
                 _log_earning(conn, row["user_id"], "starting_grant", amount, amount, now)
                 granted.append(row["user_id"])
     return granted
+
+
+# ------------------------------------------------------------------- earning
+
+def can_earn(member: sqlite3.Row | None, now: datetime) -> bool:
+    return (member is not None and bool(member["in_guild"])
+            and is_established(parse_ts(member["joined_at"]), now))
+
+
+def credit(conn, member: sqlite3.Row, source: str, base: float, now: datetime, *,
+           counterpart_id=None, message_id=None, detail: dict | None = None) -> int:
+    """Pay an activity earning: apply the daily soft cap, carry fractions, update the
+    mint and log it. Call inside a transaction. Returns the whole bucks credited."""
+    threshold = CONFIG.soft_cap.daily_threshold
+    earned = earned_today(conn, member["user_id"], now)
+    full = max(0.0, min(base, threshold - earned))
+    value = full + (base - full) * CONFIG.soft_cap.rate_after
+    total = round(value + member["earn_carry"], 6)  # round away float noise before flooring
+    amount = int(total)
+    conn.execute(
+        "UPDATE members SET mint = mint + ?, earn_carry = ? WHERE user_id = ?",
+        (amount, total - amount, member["user_id"]),
+    )
+    detail = dict(detail or {})
+    if full < base:
+        detail["soft_capped"] = round(base - full, 6)
+    _log_earning(conn, member["user_id"], source, base, amount, now,
+                 counterpart_id=counterpart_id, message_id=message_id,
+                 detail=json.dumps(detail) if detail else None)
+    return amount
+
+
+_CUSTOM_EMOJI_ANY = re.compile(r"<a?:\w+:\d+>")
+_MENTION_ANY = re.compile(r"<(?:@[!&]?|#)\d+>")
+
+
+def visible_length(content: str) -> int:
+    """Characters a person actually typed: custom emoji and mentions count as one,
+    runs of whitespace as one."""
+    text = _CUSTOM_EMOJI_ANY.sub("x", content)
+    text = _MENTION_ANY.sub("x", text)
+    return len(" ".join(text.split()))
+
+
+def earn_chat(conn, user_id: int, now: datetime, *, message_id: int | None = None,
+              reply_to: int | None = None) -> int | None:
+    """Pay for a qualifying message (caller checks length and that `reply_to`, if given,
+    is another human). Returns bucks credited, or None if not eligible / on cooldown."""
+    cooldown = timedelta(seconds=CONFIG.chat.cooldown_seconds)
+    with transaction(conn):
+        member = get_member(conn, user_id)
+        if not can_earn(member, now):
+            return None
+        last = conn.execute(
+            "SELECT created_at FROM earnings WHERE user_id = ? AND source IN ('message', 'reply')"
+            " ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        if last and now - parse_ts(last["created_at"]) < cooldown:
+            return None
+        if reply_to is not None:
+            source, base = "reply", CONFIG.chat.reply_reward
+        else:
+            source, base = "message", CONFIG.chat.message_reward
+        return credit(conn, member, source, base, now,
+                      counterpart_id=reply_to, message_id=message_id)
 
 
 # --------------------------------------------------------------------- gifts

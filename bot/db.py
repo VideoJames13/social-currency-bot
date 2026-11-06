@@ -122,6 +122,12 @@ MIGRATIONS = [
         ON members (currency_key) WHERE currency_key IS NOT NULL;
     ALTER TABLE adjustments ADD COLUMN currency_owner_id INTEGER;
     """,
+    # 3: text earning
+    # - earn_carry: fractional remainder of earnings (soft cap 25%, voice multipliers).
+    #   Mints stay whole numbers; the fraction rolls into the next payout.
+    """
+    ALTER TABLE members ADD COLUMN earn_carry REAL NOT NULL DEFAULT 0;
+    """,
 ]
 
 
