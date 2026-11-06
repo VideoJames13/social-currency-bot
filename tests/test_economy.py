@@ -517,5 +517,51 @@ class ListenerTest(unittest.TestCase):
         asyncio.run(self.vc._on_ws_message(None, {"op": 5, "d": {"bad": 1}}))  # ignored
 
 
+class SafetyTest(unittest.TestCase):
+    def test_post_guard_trips_and_recovers(self):
+        from bot.safety import PostGuard
+        g = PostGuard(limit=3)
+        times = [T0 + timedelta(minutes=i) for i in range(3)]
+        self.assertTrue(all(g.allow(t) for t in times))
+        self.assertFalse(g.allow(T0 + timedelta(minutes=10)))
+        self.assertTrue(g.tripped)
+        self.assertEqual(g.resumes_at(), T0 + timedelta(hours=1))
+        self.assertFalse(g.allow(T0 + timedelta(minutes=59)))
+        self.assertTrue(g.allow(T0 + timedelta(hours=1)))    # oldest post aged out
+        self.assertFalse(g.tripped)
+        self.assertFalse(g.allow(T0 + timedelta(hours=1, seconds=1)))  # still 3 in window
+
+    def test_bot_post_blocks_and_warns_owner_once(self):
+        import asyncio
+        from types import SimpleNamespace
+        from bot.client import BucksBot, PostingPaused
+        from bot.safety import PostGuard
+
+        sent, dms = [], []
+
+        class FakeChannel:
+            async def send(self, *a, **k):
+                sent.append(a)
+
+        bot = BucksBot.__new__(BucksBot)
+        bot.post_guard = PostGuard(limit=2)
+        bot._owner_warned = False
+
+        async def dm(text):
+            dms.append(text)
+        bot._dm_owner = dm
+
+        async def run():
+            ch = FakeChannel()
+            await bot.post(ch, "a")
+            await bot.post(ch, "b")
+            for _ in range(3):
+                with self.assertRaises(PostingPaused):
+                    await bot.post(ch, "spam")
+        asyncio.run(run())
+        self.assertEqual(len(sent), 2)
+        self.assertEqual(len(dms), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

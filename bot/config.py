@@ -30,3 +30,4 @@ load_dotenv(ROOT / ".env")
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 _owner = os.getenv("OWNER_ID", "").strip()
 OWNER_ID = int(_owner) if _owner.isdigit() else None
+HEALTHCHECK_URL = os.getenv("HEALTHCHECK_URL", "").strip() or None

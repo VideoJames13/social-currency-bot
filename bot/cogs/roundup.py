@@ -8,6 +8,7 @@ from discord.ext import commands, tasks
 
 from .. import economy
 from ..checks import owner_only
+from ..client import PostingPaused
 from ..config import CONFIG, TZ
 from ..db import now_utc
 from ..formatting import EMBED_COLOR, join_lines, plain
@@ -45,6 +46,7 @@ def build_embed(data: dict, end) -> discord.Embed | None:
 class Roundup(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.posted_day = None  # in-memory backstop against re-posting the same day
 
     async def cog_load(self):
         self.roundup_loop.start()
@@ -54,8 +56,15 @@ class Roundup(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def roundup_loop(self):
+        try:
+            await self._tick()
+        except Exception:  # keep the loop alive; it retries next minute
+            log.exception("Roundup tick failed")
+
+    async def _tick(self):
         db, now = self.bot.db, now_utc()
-        if not economy.roundup_due(db, now):
+        today = now.astimezone(TZ).date()
+        if self.posted_day == today or not economy.roundup_due(db, now):
             return
         start = economy.roundup_window_start(db, now)
         data = economy.roundup(db, start, now)
@@ -66,13 +75,19 @@ class Roundup(commands.Cog):
                 log.error("Roundup: transactions channel not found; will retry")
                 return
             try:
-                await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+                await self.bot.post(channel, embed=embed,
+                                    allowed_mentions=discord.AllowedMentions.none())
+            except PostingPaused:
+                log.error("Roundup: posting paused by circuit breaker; will retry")
+                return
             except discord.HTTPException:
                 log.exception("Roundup: couldn't post; will retry")
                 return
+            self.posted_day = today
             log.info("Posted daily roundup (%d members)", len(data["members"]))
         else:
             log.info("Daily roundup: no earnings, nothing posted")
+        self.posted_day = today
         economy.mark_roundup_done(db, now)
 
     @roundup_loop.before_loop

@@ -57,6 +57,14 @@ duration_start = 1.2
 duration_step = 0.1
 duration_max = 2.3
 
+[safety]
+# Circuit breaker: if the bot tries to post more than this many messages in an hour
+# (gift announcements, roundups, /setup), it stops posting until the hour has room
+# again and DMs the owner. Gifts themselves still go through.
+max_posts_per_hour = 60
+# Uptime monitor check-in (HEALTHCHECK_URL in .env, optional), every N minutes.
+healthcheck_interval_minutes = 5
+
 [speaking]
 enabled = true                  # false = bot never joins voice; unmuted-other rule everywhere
 window_minutes = 10             # "spoke recently" window

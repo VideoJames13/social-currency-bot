@@ -13,6 +13,7 @@ from discord.ext import commands
 
 from .. import economy, guide
 from ..checks import owner_only
+from ..client import PostingPaused
 from ..config import CONFIG
 from ..db import now_utc
 from ..economy import EconomyError
@@ -77,11 +78,16 @@ class Admin(commands.Cog):
                 if msg.author.id == self.bot.user.id:
                     await msg.delete()
             quiet = discord.AllowedMentions.none()
-            guide_msg = await channel.send(guide.how_bucks_work(), allowed_mentions=quiet)
-            voice_msg = await channel.send(guide.VOICE_NOTICE, allowed_mentions=quiet)
+            guide_msg = await self.bot.post(channel, guide.how_bucks_work(),
+                                            allowed_mentions=quiet)
+            voice_msg = await self.bot.post(channel, guide.VOICE_NOTICE, allowed_mentions=quiet)
             # Newest pin shows first, so pin the guide last to keep it on top.
             await voice_msg.pin(reason="/setup")
             await guide_msg.pin(reason="/setup")
+        except PostingPaused:
+            return await interaction.followup.send(
+                "Posting is paused by the circuit breaker (too many posts this hour). "
+                "Check the logs, then try again later.", ephemeral=True)
         except discord.Forbidden:
             return await interaction.followup.send(
                 f"I'm missing permissions in {channel.mention}. I need View Channel, "

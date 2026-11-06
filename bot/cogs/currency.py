@@ -9,6 +9,7 @@ from discord.ext import commands
 
 from .. import economy
 from ..config import CONFIG
+from ..client import PostingPaused
 from ..db import now_utc
 from ..economy import EconomyError
 from ..formatting import EMBED_COLOR, currency_label, join_lines, member_currency, plain
@@ -63,8 +64,12 @@ class Currency(commands.Cog):
         try:
             if channel is None:
                 raise RuntimeError("transactions channel not found")
-            await channel.send(text, allowed_mentions=discord.AllowedMentions(
+            await self.bot.post(channel, text, allowed_mentions=discord.AllowedMentions(
                 everyone=False, roles=False, users=[user]))
+        except PostingPaused:
+            await interaction.followup.send(
+                "Your gift went through, but announcements are paused right now. "
+                "The server owner has been notified.", ephemeral=True)
         except (discord.HTTPException, RuntimeError):
             log.exception("Couldn't post gift announcement")
             await interaction.followup.send(

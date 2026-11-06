@@ -70,7 +70,10 @@ class Members(commands.Cog):
 
     @tasks.loop(minutes=30)
     async def grant_loop(self):
-        self._grant()
+        try:
+            self._grant()
+        except Exception:  # keep the loop alive
+            log.exception("Starting-balance grant failed")
 
     @grant_loop.before_loop
     async def _before_grant_loop(self):
