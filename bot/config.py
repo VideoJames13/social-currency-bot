@@ -23,6 +23,16 @@ def load_config(path: Path = ROOT / "config.toml") -> SimpleNamespace:
 
 
 CONFIG = load_config()
+
+
+def apply_overrides(path: Path) -> None:
+    """Overwrite CONFIG values in place from another TOML file (used by the tests to
+    pin known settings). In place, because every module shares this CONFIG object."""
+    with open(path, "rb") as f:
+        for section, values in tomllib.load(f).items():
+            target = getattr(CONFIG, section)
+            for key, value in values.items():
+                setattr(target, key, value)
 TZ = ZoneInfo(CONFIG.server.timezone)
 DB_PATH = ROOT / CONFIG.server.database_path
 

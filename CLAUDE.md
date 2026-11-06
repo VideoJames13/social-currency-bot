@@ -71,6 +71,8 @@ A Discord social-currency bot for a ~50-member server (~20 active). Full spec is
 - `bot/checks.py` — `owner_only()`; owner commands also use `default_permissions(administrator=True)` to hide them.
 - Setup: `python -m venv .venv` then `.venv/Scripts/python -m pip install -r requirements.txt`. Run: `.venv/Scripts/python -m bot`.
 - Tests: `.venv/Scripts/python -m unittest discover tests` (stdlib unittest, no extra deps). Add tests for every new earning rule; run them before each commit.
+- Tests run against **`tests/baseline_config.toml`** (pinned via `config.apply_overrides()` at the top of the test file), never the live `config.toml`, so tuning rates can't fail the suite and block `update.sh`. Only edit the baseline on purpose, together with the tests that depend on it.
+- **Launch checklist item:** `min_account_age_days` was set to 0 on 2026-11-06 for the two-account voice test (commit labeled TEMP). It must go back to 7 before the real launch.
 
 ## Decisions made during the build
 

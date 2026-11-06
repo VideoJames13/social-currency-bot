@@ -6,9 +6,16 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from bot import db, economy
-from bot.config import CONFIG
-from bot.economy import EconomyError
+from bot.config import CONFIG, apply_overrides
+
+# Tests check rules against known numbers, so pin the settings to a fixed copy.
+# Without this, tuning a rate in config.toml (or a temporary tweak like
+# min_account_age_days = 0) would fail the suite, and deploy/update.sh refuses to
+# deploy when tests fail. Must run before anything reads CONFIG.
+apply_overrides(Path(__file__).with_name("baseline_config.toml"))
+
+from bot import db, economy  # noqa: E402
+from bot.economy import EconomyError  # noqa: E402
 
 T0 = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
 OLD = T0 - timedelta(days=100)   # long-time member
