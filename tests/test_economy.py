@@ -437,5 +437,85 @@ class VoiceTickTest(Base):
         self.assertEqual(sum(got), 2)  # 4 minutes * 2 * 25%
 
 
+class SpeakingCheckTest(unittest.TestCase):
+    EST = {1, 2, 3}
+    W = timedelta(minutes=CONFIG.speaking.window_minutes)
+
+    def factor(self, uid, members, spoke=None, since=T0 - timedelta(hours=1), now=T0):
+        ch = VoiceChannel(10, members, listening_since=since, last_spoke=spoke or {})
+        member = next(m for m in members if m.user_id == uid)
+        return voice.activity_factor(member, ch, self.EST, now)
+
+    def test_spoke_quiet_silent(self):
+        people = [VM(1), VM(2), VM(3)]
+        recently = T0 - timedelta(minutes=3)
+        self.assertEqual(self.factor(1, people, {1: recently}), (1.0, "spoke"))
+        self.assertEqual(self.factor(2, people, {1: recently}),
+                         (CONFIG.speaking.quiet_rate, "quiet"))
+        self.assertEqual(self.factor(1, people, {1: T0 - self.W - timedelta(seconds=1)}),
+                         (0.0, "silent_channel"))
+        self.assertEqual(self.factor(1, people, {1: T0 - self.W}), (1.0, "spoke"))  # edge
+
+    def test_muted_listener_still_gets_quiet_rate(self):
+        people = [VM(1, muted=True), VM(2)]
+        self.assertEqual(self.factor(1, people, {2: T0}), (CONFIG.speaking.quiet_rate, "quiet"))
+
+    def test_talking_alone_earns_nothing(self):
+        self.assertEqual(self.factor(1, [VM(1)], {1: T0}), (0.0, "alone"))
+        self.assertEqual(self.factor(1, [VM(1), VM(2, deaf=True)], {1: T0}), (0.0, "alone"))
+        self.assertEqual(self.factor(1, [VM(1), VM(99)], {1: T0}), (0.0, "alone"))  # 99 = alt
+
+    def test_alt_speaking_doesnt_make_channel_active(self):
+        self.assertEqual(self.factor(1, [VM(1), VM(2), VM(99)], {99: T0}),
+                         (0.0, "silent_channel"))
+
+    def test_warm_up_uses_unmuted_rule(self):
+        since = T0 - timedelta(minutes=2)
+        self.assertEqual(self.factor(1, [VM(1), VM(2)], since=since), (1.0, "warming_up"))
+        self.assertEqual(self.factor(1, [VM(1), VM(2, muted=True)], since=since),
+                         (0.0, "warming_up"))
+
+    def test_channels_without_bot_use_unmuted_rule(self):
+        ch = VoiceChannel(10, [VM(1), VM(2)])
+        self.assertEqual(voice.activity_factor(VM(1), ch, self.EST, T0), (1.0, "unmuted_other"))
+
+
+class ListenerTest(unittest.TestCase):
+    """Speaking detection bookkeeping, without a real voice connection."""
+
+    def setUp(self):
+        import threading
+        from bot.listener import SpeakingVoiceClient
+        self.vc = SpeakingVoiceClient.__new__(SpeakingVoiceClient)  # skip network setup
+        self.vc._lock = threading.Lock()
+        self.vc._ssrc_user, self.vc._last_spoke = {}, {}
+
+    @staticmethod
+    def rtp(ssrc, pt=120, marker=False, size=60):
+        header = bytes([0x80, pt | (0x80 if marker else 0), 0, 1, 0, 0, 0, 0])
+        return header + ssrc.to_bytes(4, "big") + bytes(size - 12)
+
+    def test_rtp_ssrc(self):
+        from bot.listener import rtp_ssrc
+        self.assertEqual(rtp_ssrc(self.rtp(1234)), 1234)
+        self.assertEqual(rtp_ssrc(self.rtp(1234, marker=True)), 1234)
+        self.assertIsNone(rtp_ssrc(self.rtp(1234, pt=72)))          # RTCP (200 & 0x7F)
+        self.assertIsNone(rtp_ssrc(bytes([0, 2, 0, 70]) + bytes(70)))  # IP discovery
+        self.assertIsNone(rtp_ssrc(b"\x80\x78"))                      # truncated
+
+    def test_packets_mark_mapped_users_only(self):
+        import asyncio
+        self.vc._on_packet(self.rtp(555))
+        self.assertEqual(self.vc.last_spoke(), {})                    # unknown SSRC ignored
+        asyncio.run(self.vc._on_ws_message(None, {"op": 5, "d": {
+            "user_id": "42", "ssrc": 555, "speaking": 0}}))
+        self.assertEqual(self.vc.last_spoke(), {})                    # mapping only
+        self.vc._on_packet(self.rtp(555))
+        self.assertIn(42, self.vc.last_spoke())
+        asyncio.run(self.vc._on_ws_message(None, {"op": 13, "d": {"user_id": "42"}}))
+        self.assertEqual(self.vc._ssrc_user, {})
+        asyncio.run(self.vc._on_ws_message(None, {"op": 5, "d": {"bad": 1}}))  # ignored
+
+
 if __name__ == "__main__":
     unittest.main()

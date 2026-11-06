@@ -1,3 +1,8 @@
+# discord.py is pinned on purpose: bot/listener.py uses semi-internal voice hooks.
+# Re-test the speaking check before upgrading it.
 discord.py==2.7.1
 python-dotenv==1.2.4
 tzdata==2026.6
+# Voice: PyNaCl for the voice connection, davey for Discord's DAVE encryption handshake.
+PyNaCl==1.6.2
+davey==0.2.0

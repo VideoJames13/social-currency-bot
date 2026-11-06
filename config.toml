@@ -58,6 +58,9 @@ duration_step = 0.1
 duration_max = 2.3
 
 [speaking]
+enabled = true                  # false = bot never joins voice; unmuted-other rule everywhere
 window_minutes = 10             # "spoke recently" window
 quiet_rate = 0.5                # channel active but this member quiet
 # If nobody in the bot's channel has spoken within the window, rate is 0.
+# During the bot's first window in a channel (no data yet) the unmuted-other rule applies.
+# Talking alone (no one else in the channel) earns nothing.
