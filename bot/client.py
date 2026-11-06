@@ -18,6 +18,7 @@ EXTENSIONS = [
     "bot.cogs.chat",
     "bot.cogs.reactions",
     "bot.cogs.roundup",
+    "bot.cogs.voice",
 ]
 
 

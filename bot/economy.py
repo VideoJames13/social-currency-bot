@@ -11,6 +11,7 @@ import sqlite3
 import unicodedata
 from datetime import datetime, timedelta, timezone
 
+from . import voice
 from .config import CONFIG, TZ
 from .db import local_day, transaction
 
@@ -351,6 +352,59 @@ def earn_reaction(conn, reactor_id: int, author_id: int, message_id: int, channe
                 author_paid = credit(conn, author, "react_received", r.receive_reward, now,
                                      counterpart_id=reactor_id, message_id=message_id)
         return reactor_paid, author_paid
+
+
+def voice_tick(conn, channels, now: datetime) -> dict[int, int]:
+    """Pay one loop's worth of voice earnings. `channels`: list of voice.VoiceChannel.
+    Maintains voice_sessions (continuous-session length) and rebuilds it from the
+    snapshot: anyone not in voice is dropped. Returns {user_id: bucks credited}."""
+    v = CONFIG.voice
+    grace = timedelta(minutes=v.session_grace_minutes)
+    minutes = v.loop_seconds / 60
+    paid: dict[int, int] = {}
+    with transaction(conn):
+        sessions = {r["user_id"]: r for r in conn.execute("SELECT * FROM voice_sessions")}
+        members = {r["user_id"]: r for r in conn.execute("SELECT * FROM members")}
+        established = {uid for uid, r in members.items() if can_earn(r, now)}
+        present = set()
+        for ch in channels:
+            if ch.afk:
+                continue
+            crowd = voice.crowd_multiplier(len(voice.counted(ch, established)))
+            for m in ch.members:
+                if m.user_id not in members:  # not registered yet (joined seconds ago)
+                    continue
+                present.add(m.user_id)
+                s = sessions.get(m.user_id)
+                fresh = s is None or parse_ts(s["last_seen_at"] or s["started_at"]) < now - grace
+                started = now.isoformat() if fresh else s["started_at"]
+                earning_minutes = 0 if fresh else s["earning_minutes"]
+
+                if not m.deaf and m.user_id in established:
+                    factor, reason = voice.activity_factor(m, ch, established, now)
+                    duration = voice.duration_multiplier(earning_minutes)
+                    base = voice.base_rate(m)
+                    rate = round(base * crowd * duration * factor * minutes, 6)
+                    if rate > 0:
+                        paid[m.user_id] = credit(
+                            conn, members[m.user_id], "voice", rate, now,
+                            detail={"base": base, "crowd": crowd, "duration": duration,
+                                    "activity": factor, "why": reason,
+                                    "channel": ch.channel_id})
+                        members[m.user_id] = get_member(conn, m.user_id)  # fresh earn_carry
+                        earning_minutes += 1
+
+                conn.execute(
+                    "INSERT INTO voice_sessions (user_id, channel_id, started_at, earning_minutes,"
+                    " last_seen_at) VALUES (?, ?, ?, ?, ?)"
+                    " ON CONFLICT (user_id) DO UPDATE SET channel_id = excluded.channel_id,"
+                    " started_at = excluded.started_at, earning_minutes = excluded.earning_minutes,"
+                    " last_seen_at = excluded.last_seen_at",
+                    (m.user_id, ch.channel_id, started, earning_minutes, now.isoformat()),
+                )
+        for uid in set(sessions) - present:
+            conn.execute("DELETE FROM voice_sessions WHERE user_id = ?", (uid,))
+    return paid
 
 
 # --------------------------------------------------------------------- gifts

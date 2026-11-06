@@ -139,6 +139,15 @@ MIGRATIONS = [
     CREATE INDEX earnings_created ON earnings (created_at);
     DROP TABLE messages;
     """,
+    # 5: voice earning
+    # - earning_minutes: minutes in this session that earned (drives the duration multiplier).
+    # - last_seen_at: last tick the member was in voice; a gap > grace ends the session.
+    # - last_spoke_at dropped: speaking activity is kept in memory only, never stored.
+    """
+    ALTER TABLE voice_sessions ADD COLUMN earning_minutes INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE voice_sessions ADD COLUMN last_seen_at TEXT;
+    ALTER TABLE voice_sessions DROP COLUMN last_spoke_at;
+    """,
 ]
 
 

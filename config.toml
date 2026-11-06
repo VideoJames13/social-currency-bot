@@ -39,6 +39,8 @@ loop_seconds = 60
 base_per_minute = 2
 camera_bonus = 1
 screenshare_bonus = 1
+# A session survives a bot restart or brief drop if the member is seen again within this.
+session_grace_minutes = 5
 
 # Crowd multiplier: x1.0 below min_people, x(start) at min_people,
 # +step per extra person, capped at max.
@@ -49,6 +51,7 @@ crowd_max = 2.0
 
 # Duration multiplier: x1.0 for the first hour of a continuous session,
 # x(start) after start_hours, +step per extra hour, capped at max.
+# Only minutes that actually earned count toward the session length.
 duration_start_hours = 1
 duration_start = 1.2
 duration_step = 0.1

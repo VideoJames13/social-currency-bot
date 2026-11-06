@@ -333,5 +333,109 @@ class RoundupTest(Base):
         self.assertEqual(economy.roundup_window_start(self.conn, at + timedelta(days=1)), at)
 
 
+from bot import voice  # noqa: E402
+from bot.voice import VoiceChannel, VoiceMember as VM  # noqa: E402
+
+
+class VoiceRulesTest(unittest.TestCase):
+    def test_crowd_multiplier(self):
+        expected = {1: 1.0, 2: 1.0, 3: 1.3, 4: 1.4, 9: 1.9, 10: 2.0, 25: 2.0}
+        for n, m in expected.items():
+            with self.subTest(n=n):
+                self.assertEqual(voice.crowd_multiplier(n), m)
+
+    def test_duration_multiplier(self):
+        expected = {0: 1.0, 59: 1.0, 60: 1.2, 119: 1.2, 120: 1.3, 11 * 60: 2.2, 12 * 60: 2.3,
+                    30 * 60: 2.3}
+        for mins, m in expected.items():
+            with self.subTest(mins=mins):
+                self.assertEqual(voice.duration_multiplier(mins), m)
+
+    def test_base_rate(self):
+        self.assertEqual(voice.base_rate(VM(1)), 2)
+        self.assertEqual(voice.base_rate(VM(1, video=True)), 3)
+        self.assertEqual(voice.base_rate(VM(1, video=True, stream=True)), 4)
+
+
+class VoiceTickTest(Base):
+    def setUp(self):
+        super().setUp()
+        for uid in range(1, 13):
+            self.add(uid, f"U{uid}")
+        self.launch()
+
+    def tick(self, channels, at):
+        return economy.voice_tick(self.conn, channels, at)
+
+    def test_pair_earns_base_rate(self):
+        ch = VoiceChannel(10, [VM(1), VM(2)])
+        self.assertEqual(self.tick([ch], T0), {1: 2, 2: 2})
+
+    def test_alone_deafened_afk_and_muted_others(self):
+        self.assertEqual(self.tick([VoiceChannel(10, [VM(1)])], T0), {})                  # alone
+        self.assertEqual(self.tick([VoiceChannel(10, [VM(1), VM(2, deaf=True, muted=True)])],
+                                   T0), {})                                                # other deaf
+        self.assertEqual(self.tick([VoiceChannel(10, [VM(1, deaf=True, muted=True), VM(2)])],
+                                   T0), {})                                                # 2 has nobody
+        self.assertEqual(self.tick([VoiceChannel(10, [VM(1), VM(2)], afk=True)], T0), {})  # AFK
+        # 1 is muted but 2 is talking: 1 still earns (listening); 2 has nobody unmuted.
+        self.assertEqual(self.tick([VoiceChannel(10, [VM(1, muted=True), VM(2)])], T0), {1: 2})
+
+    def test_new_accounts_dont_earn_or_count(self):
+        self.add(50, "Alt", joined=T0 - timedelta(days=1))
+        ch = VoiceChannel(10, [VM(1, muted=True), VM(50)])   # only the alt is unmuted
+        self.assertEqual(self.tick([ch], T0), {})
+        crowd = VoiceChannel(10, [VM(1), VM(2), VM(50), VM(51)])  # 51 isn't even registered
+        self.assertEqual(self.tick([crowd], T0), {1: 2, 2: 2})    # crowd is 2, not 4
+
+    def test_crowd_and_camera(self):
+        ch = VoiceChannel(10, [VM(1, video=True, stream=True)] + [VM(u) for u in range(2, 11)])
+        paid = self.tick([ch], T0)  # 10 people -> x2.0
+        self.assertEqual(paid[1], 8)
+        self.assertEqual(paid[2], 4)
+
+    def test_fractions_carry(self):
+        ch = VoiceChannel(10, [VM(u) for u in (1, 2, 3)])  # x1.3 -> 2.6/min
+        got = [self.tick([ch], T0 + timedelta(minutes=i))[1] for i in range(5)]
+        self.assertEqual(sum(got), 13)  # 5 * 2.6 = 13 exactly, nothing lost to rounding
+        self.assertEqual(got[:3], [2, 3, 2])
+
+    def test_duration_session_and_reset(self):
+        ch = VoiceChannel(10, [VM(1), VM(2)])
+        for i in range(60):
+            self.tick([ch], T0 + timedelta(minutes=i))
+        detail = lambda: self.conn.execute(  # noqa: E731
+            "SELECT detail FROM earnings WHERE user_id = 1 ORDER BY id DESC LIMIT 1"
+        ).fetchone()["detail"]
+        self.assertIn('"duration": 1.0', detail())
+        self.tick([VoiceChannel(11, [VM(1), VM(2)])], T0 + timedelta(minutes=60))  # moved channel
+        self.assertIn('"duration": 1.2', detail())                                  # kept session
+        # Gone longer than the grace period -> new session
+        back = T0 + timedelta(minutes=61 + CONFIG.voice.session_grace_minutes + 1)
+        self.tick([ch], back)
+        self.assertIn('"duration": 1.0', detail())
+
+    def test_non_earning_minutes_dont_build_duration(self):
+        alone = VoiceChannel(10, [VM(1)])
+        for i in range(90):
+            self.tick([alone], T0 + timedelta(minutes=i))
+        row = self.conn.execute("SELECT earning_minutes FROM voice_sessions WHERE user_id = 1"
+                                ).fetchone()
+        self.assertEqual(row["earning_minutes"], 0)
+
+    def test_sessions_dropped_when_leaving_voice(self):
+        self.tick([VoiceChannel(10, [VM(1), VM(2)])], T0)
+        self.tick([VoiceChannel(10, [VM(1)])], T0 + timedelta(minutes=1))
+        ids = [r[0] for r in self.conn.execute("SELECT user_id FROM voice_sessions")]
+        self.assertEqual(ids, [1])
+
+    def test_soft_cap_applies_to_voice(self):
+        with db.transaction(self.conn):
+            economy.credit(self.conn, self.member(1), "message", CONFIG.soft_cap.daily_threshold, T0)
+        ch = VoiceChannel(10, [VM(1), VM(2)])
+        got = [self.tick([ch], T0 + timedelta(minutes=i)).get(1, 0) for i in range(4)]
+        self.assertEqual(sum(got), 2)  # 4 minutes * 2 * 25%
+
+
 if __name__ == "__main__":
     unittest.main()
